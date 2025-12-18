@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "./lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -195,7 +195,7 @@ export default function DashboardLovable() {
     recurring: false,
   });
 
-  // ✅ Sempre carrega do banco
+  // ✅ Carrega sempre do banco
   async function refresh() {
     const { data, error } = await supabase
       .from("expenses")
@@ -213,8 +213,7 @@ export default function DashboardLovable() {
     setExpenses(rows.map(dbToUi));
   }
 
-  // ✅ 1) carrega no mount
-  // ✅ 2) realtime: qualquer mudança -> refresh
+  // mount + realtime
   useEffect(() => {
     refresh();
 
@@ -223,9 +222,7 @@ export default function DashboardLovable() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "expenses" },
-        () => {
-          refresh();
-        }
+        () => refresh()
       )
       .subscribe();
 
@@ -296,12 +293,23 @@ export default function DashboardLovable() {
 
   // ===== CRUD =====
   async function addExpense() {
-    const amount = Number(String(form.amount).replace(/\./g, "").replace(",", "."));
+    const amount = Number(
+      String(form.amount).replace(/\./g, "").replace(",", ".")
+    );
 
     if (!form.date || !form.description.trim() || !Number.isFinite(amount) || amount <= 0) {
+      alert("Preencha data, descrição e um valor válido.");
       return;
     }
 
+    // ✅ precisa estar logado (RLS)
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      alert("Faça login para salvar.");
+      return;
+    }
+
+    // ✅ NÃO enviar user_id (o banco preenche com DEFAULT auth.uid())
     const payload = {
       date: form.date,
       description: form.description.trim(),
@@ -318,16 +326,15 @@ export default function DashboardLovable() {
 
     if (error) {
       console.error("Erro ao inserir expense:", error);
-      alert("Erro ao salvar no banco (veja o console).");
+      alert(error.message);
       return;
     }
 
-    // garante atualização imediata (realtime também atualiza)
-    await refresh();
+    // Atualiza lista
+    refresh();
 
     setMonth(ymFromDate(form.date));
     setOpen(false);
-
     setForm((f) => ({
       ...f,
       description: "",
@@ -343,7 +350,9 @@ export default function DashboardLovable() {
 
   async function togglePaid(id: string, currentPaid: boolean) {
     // otimista
-    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, paid: !currentPaid } : e)));
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, paid: !currentPaid } : e))
+    );
 
     const { error } = await supabase
       .from("expenses")
@@ -353,11 +362,13 @@ export default function DashboardLovable() {
     if (error) {
       console.error("Erro ao atualizar paid:", error);
       // rollback
-      setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, paid: currentPaid } : e)));
+      setExpenses((prev) =>
+        prev.map((e) => (e.id === id ? { ...e, paid: currentPaid } : e))
+      );
       return;
     }
 
-    await refresh();
+    refresh();
   }
 
   async function removeExpense(id: string) {
@@ -372,7 +383,7 @@ export default function DashboardLovable() {
       return;
     }
 
-    await refresh();
+    refresh();
   }
 
   return (
@@ -402,6 +413,10 @@ export default function DashboardLovable() {
                 </SelectContent>
               </Select>
             </div>
+
+            <Button variant="outline" className="rounded-2xl" onClick={() => supabase.auth.signOut()}>
+              Sair
+            </Button>
 
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
@@ -473,9 +488,7 @@ export default function DashboardLovable() {
                     <Label>Forma de pagamento</Label>
                     <Select
                       value={form.paymentMethod}
-                      onValueChange={(v) =>
-                        setForm((f) => ({ ...f, paymentMethod: v as PaymentMethod }))
-                      }
+                      onValueChange={(v) => setForm((f) => ({ ...f, paymentMethod: v as PaymentMethod }))}
                     >
                       <SelectTrigger className="rounded-2xl">
                         <SelectValue />
@@ -519,9 +532,7 @@ export default function DashboardLovable() {
                   <div className="flex items-center gap-3">
                     <Checkbox
                       checked={form.recurring}
-                      onCheckedChange={(v) =>
-                        setForm((f) => ({ ...f, recurring: Boolean(v) }))
-                      }
+                      onCheckedChange={(v) => setForm((f) => ({ ...f, recurring: Boolean(v) }))}
                     />
                     <span className="text-sm">Recorrente</span>
                   </div>
@@ -544,9 +555,7 @@ export default function DashboardLovable() {
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-4">
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total do mês
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total do mês</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.total)}</div>
@@ -556,9 +565,7 @@ export default function DashboardLovable() {
 
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Recorrentes
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Recorrentes</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.recurringTotal)}</div>
@@ -568,9 +575,7 @@ export default function DashboardLovable() {
 
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Pendentes
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Pendentes</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.pendingTotal)}</div>
@@ -580,9 +585,7 @@ export default function DashboardLovable() {
 
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Média (últ. 6 meses)
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Média (últ. 6 meses)</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.avg6)}</div>
@@ -607,9 +610,7 @@ export default function DashboardLovable() {
                   <Bar dataKey="value" radius={[12, 12, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-              {!byCategory.length && (
-                <div className="mt-3 text-sm text-muted-foreground">Sem dados para este mês.</div>
-              )}
+              {!byCategory.length && <div className="mt-3 text-sm text-muted-foreground">Sem dados para este mês.</div>}
             </CardContent>
           </Card>
 
@@ -637,9 +638,7 @@ export default function DashboardLovable() {
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <CardTitle className="text-base">Lançamentos do mês</CardTitle>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {filtered.length} item(ns) após filtros
-                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{filtered.length} item(ns) após filtros</div>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -790,9 +789,7 @@ export default function DashboardLovable() {
               <div className="text-xs text-muted-foreground">
                 Dica: clique no status (Pago/Pendente) para alternar rapidamente.
               </div>
-              <div className="text-sm font-semibold">
-                Total (após filtros): {formatBRL(sum(filtered))}
-              </div>
+              <div className="text-sm font-semibold">Total (após filtros): {formatBRL(sum(filtered))}</div>
             </div>
           </CardContent>
         </Card>
