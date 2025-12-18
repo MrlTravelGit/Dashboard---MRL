@@ -229,9 +229,23 @@ export default function DashboardLovable() {
     setExpenses(rows.map(dbToUi));
   }
 
-  useEffect(() => {
-    refresh();
-  }, []);
+async function loadExpensesFromDb() {
+  const { data, error } = await supabase
+    .from("expenses")
+    .select(
+      "id,created_at,date,description,category,payment_method,amount,paid,recurring,vendor,notes"
+    )
+    .order("date", { ascending: false });
+
+  if (error) {
+    console.error("Erro ao carregar expenses:", error);
+    return;
+  }
+
+  const rows = (data ?? []) as DbExpenseRow[];
+  setExpenses(rows.map(dbToUi));
+}
+
 
   // ====== Cálculos / filtros ======
   const months = useMemo(() => {
