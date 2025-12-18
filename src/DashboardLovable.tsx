@@ -297,10 +297,12 @@ export default function DashboardLovable() {
  async function addExpense() {
   console.log("SUPABASE URL:", import.meta.env.VITE_SUPABASE_URL);
 
-  const amount = Number(
-    String(form.amount).replace(/\./g, "").replace(",", ".")
-  );
-  ...
+const { data, error } = await supabase.from("expenses").insert(payload);
+
+if (error) {
+  console.error("ERRO INSERT SUPABASE:", error.message, error.details);
+  alert("Erro ao salvar no banco. Veja o console.");
+  return;
 }
 
     const uiNew: Omit<Expense, "id" | "created_at"> = {
