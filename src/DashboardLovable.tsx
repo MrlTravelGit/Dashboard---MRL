@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "./lib/supabase";
+import { supabase } from "./lib/supabaseClient";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -57,7 +57,7 @@ type Expense = {
   date: string; // YYYY-MM-DD
   description: string;
   category: Category;
-  amountCents: number; // UI em centavos
+  amountCents: number;
   paid: boolean;
   paymentMethod: PaymentMethod;
   vendor?: string;
@@ -65,52 +65,6 @@ type Expense = {
   recurring?: boolean;
 };
 
-// ====== Banco (Supabase) ======
-type DbExpenseRow = {
-  id: string;
-  created_at: string;
-  date: string;
-  description: string;
-  category: string;
-  payment_method: string;
-  amount: number; // REAIS no banco (numeric)
-  paid: boolean;
-  recurring: boolean;
-  vendor: string | null;
-  notes: string | null;
-};
-
-function dbToUi(row: DbExpenseRow): Expense {
-  return {
-    id: row.id,
-    created_at: row.created_at,
-    date: row.date,
-    description: row.description,
-    category: (row.category as Category) ?? "Outros",
-    paymentMethod: (row.payment_method as PaymentMethod) ?? "PIX",
-    amountCents: Math.round(Number(row.amount) * 100),
-    paid: Boolean(row.paid),
-    recurring: Boolean(row.recurring),
-    vendor: row.vendor ?? undefined,
-    notes: row.notes ?? undefined,
-  };
-}
-
-function uiToDbInsert(e: Omit<Expense, "id" | "created_at">) {
-  return {
-    date: e.date,
-    description: e.description,
-    category: e.category,
-    payment_method: e.paymentMethod,
-    amount: Number((e.amountCents / 100).toFixed(2)),
-    paid: e.paid,
-    recurring: Boolean(e.recurring),
-    vendor: e.vendor?.trim() ? e.vendor.trim() : null,
-    notes: e.notes?.trim() ? e.notes.trim() : null,
-  };
-}
-
-// ====== Constantes UI ======
 const CATEGORIES: Category[] = [
   "Sistemas",
   "IA/Assinaturas",
@@ -132,7 +86,6 @@ const PAYMENT_METHODS: PaymentMethod[] = [
   "Dinheiro",
 ];
 
-// ====== Helpers ======
 function formatBRL(cents: number) {
   const value = cents / 100;
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -187,6 +140,37 @@ const MoneyTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+// ===== Supabase row =====
+type DbExpenseRow = {
+  id: string;
+  created_at: string;
+  date: string;
+  description: string;
+  category: string;
+  payment_method: string;
+  amount: number; // REAIS no banco
+  paid: boolean;
+  recurring: boolean;
+  vendor: string | null;
+  notes: string | null;
+};
+
+function dbToUi(row: DbExpenseRow): Expense {
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    date: row.date,
+    description: row.description,
+    category: (row.category as Category) ?? "Outros",
+    paymentMethod: (row.payment_method as PaymentMethod) ?? "PIX",
+    amountCents: Math.round(Number(row.amount) * 100),
+    paid: Boolean(row.paid),
+    recurring: Boolean(row.recurring),
+    vendor: row.vendor ?? undefined,
+    notes: row.notes ?? undefined,
+  };
+}
+
 export default function DashboardLovable() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [month, setMonth] = useState<string>(nowYM());
@@ -211,7 +195,7 @@ export default function DashboardLovable() {
     recurring: false,
   });
 
-  // 1) Carregar do banco
+  // ✅ Sempre carrega do banco
   async function refresh() {
     const { data, error } = await supabase
       .from("expenses")
@@ -229,25 +213,28 @@ export default function DashboardLovable() {
     setExpenses(rows.map(dbToUi));
   }
 
-async function loadExpensesFromDb() {
-  const { data, error } = await supabase
-    .from("expenses")
-    .select(
-      "id,created_at,date,description,category,payment_method,amount,paid,recurring,vendor,notes"
-    )
-    .order("date", { ascending: false });
+  // ✅ 1) carrega no mount
+  // ✅ 2) realtime: qualquer mudança -> refresh
+  useEffect(() => {
+    refresh();
 
-  if (error) {
-    console.error("Erro ao carregar expenses:", error);
-    return;
-  }
+    const channel = supabase
+      .channel("realtime-expenses")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "expenses" },
+        () => {
+          refresh();
+        }
+      )
+      .subscribe();
 
-  const rows = (data ?? []) as DbExpenseRow[];
-  setExpenses(rows.map(dbToUi));
-}
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
-
-  // ====== Cálculos / filtros ======
+  // ===== cálculos / filtros =====
   const months = useMemo(() => {
     const fromData = Array.from(new Set(expenses.map((e) => ymFromDate(e.date))))
       .sort()
@@ -307,50 +294,38 @@ async function loadExpensesFromDb() {
     }));
   }, [expenses, month]);
 
-  // ====== Ações (CRUD) ======
- async function addExpense() {
-  console.log("SUPABASE URL:", import.meta.env.VITE_SUPABASE_URL);
+  // ===== CRUD =====
+  async function addExpense() {
+    const amount = Number(String(form.amount).replace(/\./g, "").replace(",", "."));
 
-const { data, error } = await supabase.from("expenses").insert(payload);
-
-if (error) {
-  console.error("ERRO INSERT SUPABASE:", error.message, error.details);
-  alert("Erro ao salvar no banco. Veja o console.");
-  return;
-}
-
-    const uiNew: Omit<Expense, "id" | "created_at"> = {
-      date: form.date,
-      description: form.description.trim(),
-      category: form.category,
-      amountCents: Math.round(amount * 100),
-      paid: form.paid,
-      paymentMethod: form.paymentMethod,
-      vendor: form.vendor || undefined,
-      notes: form.notes || undefined,
-      recurring: form.recurring,
-    };
-
-    const payload = uiToDbInsert(uiNew);
-
-    // pega o registro criado (id, created_at etc.)
-    const { data, error } = await supabase
-      .from("expenses")
-      .insert(payload)
-      .select(
-        "id,created_at,date,description,category,payment_method,amount,paid,recurring,vendor,notes"
-      )
-      .single();
-
-    if (error) {
-      console.error("Erro ao inserir expense:", error);
+    if (!form.date || !form.description.trim() || !Number.isFinite(amount) || amount <= 0) {
       return;
     }
 
-    const saved = dbToUi(data as DbExpenseRow);
+    const payload = {
+      date: form.date,
+      description: form.description.trim(),
+      category: form.category,
+      payment_method: form.paymentMethod,
+      amount: Number(amount.toFixed(2)), // REAIS
+      paid: form.paid,
+      recurring: form.recurring,
+      vendor: form.vendor.trim() || null,
+      notes: form.notes.trim() || null,
+    };
 
-    setExpenses((prev) => [saved, ...prev]);
-    setMonth(ymFromDate(saved.date));
+    const { error } = await supabase.from("expenses").insert(payload);
+
+    if (error) {
+      console.error("Erro ao inserir expense:", error);
+      alert("Erro ao salvar no banco (veja o console).");
+      return;
+    }
+
+    // garante atualização imediata (realtime também atualiza)
+    await refresh();
+
+    setMonth(ymFromDate(form.date));
     setOpen(false);
 
     setForm((f) => ({
@@ -367,7 +342,7 @@ if (error) {
   }
 
   async function togglePaid(id: string, currentPaid: boolean) {
-    // update otimista (muda na hora)
+    // otimista
     setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, paid: !currentPaid } : e)));
 
     const { error } = await supabase
@@ -377,13 +352,15 @@ if (error) {
 
     if (error) {
       console.error("Erro ao atualizar paid:", error);
-      // rollback se der erro
+      // rollback
       setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, paid: currentPaid } : e)));
+      return;
     }
+
+    await refresh();
   }
 
   async function removeExpense(id: string) {
-    // remove otimista
     const snapshot = expenses;
     setExpenses((prev) => prev.filter((e) => e.id !== id));
 
@@ -391,9 +368,11 @@ if (error) {
 
     if (error) {
       console.error("Erro ao deletar:", error);
-      // rollback
       setExpenses(snapshot);
+      return;
     }
+
+    await refresh();
   }
 
   return (
@@ -430,10 +409,13 @@ if (error) {
                   <Plus className="mr-2 h-4 w-4" /> Nova despesa
                 </Button>
               </DialogTrigger>
+
               <DialogContent className="sm:max-w-[560px] rounded-2xl">
                 <DialogHeader>
                   <DialogTitle>Adicionar despesa</DialogTitle>
-                  <DialogDescription>Preencha o essencial — você pode detalhar depois.</DialogDescription>
+                  <DialogDescription>
+                    Preencha o essencial — você pode detalhar depois.
+                  </DialogDescription>
                 </DialogHeader>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -537,7 +519,9 @@ if (error) {
                   <div className="flex items-center gap-3">
                     <Checkbox
                       checked={form.recurring}
-                      onCheckedChange={(v) => setForm((f) => ({ ...f, recurring: Boolean(v) }))}
+                      onCheckedChange={(v) =>
+                        setForm((f) => ({ ...f, recurring: Boolean(v) }))
+                      }
                     />
                     <span className="text-sm">Recorrente</span>
                   </div>
@@ -560,7 +544,9 @@ if (error) {
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-4">
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total do mês</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Total do mês
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.total)}</div>
@@ -570,7 +556,9 @@ if (error) {
 
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Recorrentes</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Recorrentes
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.recurringTotal)}</div>
@@ -580,7 +568,9 @@ if (error) {
 
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Pendentes</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Pendentes
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.pendingTotal)}</div>
@@ -590,7 +580,9 @@ if (error) {
 
           <Card className="rounded-2xl shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Média (últ. 6 meses)</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Média (últ. 6 meses)
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold">{formatBRL(kpis.avg6)}</div>
@@ -615,7 +607,9 @@ if (error) {
                   <Bar dataKey="value" radius={[12, 12, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-              {!byCategory.length && <div className="mt-3 text-sm text-muted-foreground">Sem dados para este mês.</div>}
+              {!byCategory.length && (
+                <div className="mt-3 text-sm text-muted-foreground">Sem dados para este mês.</div>
+              )}
             </CardContent>
           </Card>
 
@@ -643,7 +637,9 @@ if (error) {
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <CardTitle className="text-base">Lançamentos do mês</CardTitle>
-                <div className="mt-1 text-xs text-muted-foreground">{filtered.length} item(ns) após filtros</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {filtered.length} item(ns) após filtros
+                </div>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -794,7 +790,9 @@ if (error) {
               <div className="text-xs text-muted-foreground">
                 Dica: clique no status (Pago/Pendente) para alternar rapidamente.
               </div>
-              <div className="text-sm font-semibold">Total (após filtros): {formatBRL(sum(filtered))}</div>
+              <div className="text-sm font-semibold">
+                Total (após filtros): {formatBRL(sum(filtered))}
+              </div>
             </div>
           </CardContent>
         </Card>
