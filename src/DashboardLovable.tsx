@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { supabase } from "./lib/supabase";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,18 +37,6 @@ import {
   Line,
 } from "recharts";
 
-/**
- * Dashboard web “estilo Lovable” (clean + cards + filtros + botão +)
- * - Persistência simples via localStorage
- * - KPIs mensais
- * - Gráficos: por categoria (barra) e evolução mensal (linha)
- * - Tabela com busca + filtros
- *
- * Como usar no Next.js (App Router):
- * - Coloque este componente em app/page.tsx e garanta 'use client' no topo.
- * - shadcn/ui + recharts + lucide-react instalados.
- */
-
 type Category =
   | "Sistemas"
   | "IA/Assinaturas"
@@ -64,19 +49,68 @@ type Category =
   | "Marketing"
   | "Outros";
 
+type PaymentMethod = "PIX" | "Cartão" | "Boleto" | "Transferência" | "Dinheiro";
+
 type Expense = {
   id: string;
+  created_at?: string;
   date: string; // YYYY-MM-DD
   description: string;
   category: Category;
-  amountCents: number;
+  amountCents: number; // UI em centavos
   paid: boolean;
-  paymentMethod: "PIX" | "Cartão" | "Boleto" | "Transferência" | "Dinheiro";
+  paymentMethod: PaymentMethod;
   vendor?: string;
   notes?: string;
   recurring?: boolean;
 };
 
+// ====== Banco (Supabase) ======
+type DbExpenseRow = {
+  id: string;
+  created_at: string;
+  date: string;
+  description: string;
+  category: string;
+  payment_method: string;
+  amount: number; // REAIS no banco (numeric)
+  paid: boolean;
+  recurring: boolean;
+  vendor: string | null;
+  notes: string | null;
+};
+
+function dbToUi(row: DbExpenseRow): Expense {
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    date: row.date,
+    description: row.description,
+    category: (row.category as Category) ?? "Outros",
+    paymentMethod: (row.payment_method as PaymentMethod) ?? "PIX",
+    amountCents: Math.round(Number(row.amount) * 100),
+    paid: Boolean(row.paid),
+    recurring: Boolean(row.recurring),
+    vendor: row.vendor ?? undefined,
+    notes: row.notes ?? undefined,
+  };
+}
+
+function uiToDbInsert(e: Omit<Expense, "id" | "created_at">) {
+  return {
+    date: e.date,
+    description: e.description,
+    category: e.category,
+    payment_method: e.paymentMethod,
+    amount: Number((e.amountCents / 100).toFixed(2)),
+    paid: e.paid,
+    recurring: Boolean(e.recurring),
+    vendor: e.vendor?.trim() ? e.vendor.trim() : null,
+    notes: e.notes?.trim() ? e.notes.trim() : null,
+  };
+}
+
+// ====== Constantes UI ======
 const CATEGORIES: Category[] = [
   "Sistemas",
   "IA/Assinaturas",
@@ -90,7 +124,7 @@ const CATEGORIES: Category[] = [
   "Outros",
 ];
 
-const PAYMENT_METHODS: Expense["paymentMethod"][] = [
+const PAYMENT_METHODS: PaymentMethod[] = [
   "PIX",
   "Cartão",
   "Boleto",
@@ -98,16 +132,13 @@ const PAYMENT_METHODS: Expense["paymentMethod"][] = [
   "Dinheiro",
 ];
 
+// ====== Helpers ======
 function formatBRL(cents: number) {
   const value = cents / 100;
-  return value.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function ymFromDate(date: string) {
-  // date: YYYY-MM-DD
   const [y, m] = date.split("-");
   return `${y}-${m}`;
 }
@@ -117,73 +148,6 @@ function nowYM() {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   return `${y}-${m}`;
-}
-
-function uid() {
-  return Math.random().toString(16).slice(2) + Date.now().toString(16);
-}
-
-const STORAGE_KEY = "mrl_travel_expenses_v1";
-
-function seedData(): Expense[] {
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
-  return [
-    {
-      id: uid(),
-      date: `${yyyy}-${mm}-${dd}`,
-      description: "Assinatura ferramenta de reservas",
-      category: "Sistemas",
-      amountCents: 29900,
-      paid: true,
-      paymentMethod: "Cartão",
-      vendor: "Plataforma X",
-      notes: "Plano mensal",
-      recurring: true,
-    },
-    {
-      id: uid(),
-      date: `${yyyy}-${mm}-${dd}`,
-      description: "Chat/IA (workspace)",
-      category: "IA/Assinaturas",
-      amountCents: 9900,
-      paid: true,
-      paymentMethod: "Cartão",
-      vendor: "IA",
-      recurring: true,
-    },
-    {
-      id: uid(),
-      date: `${yyyy}-${mm}-${dd}`,
-      description: "Campanha tráfego pago",
-      category: "Marketing",
-      amountCents: 45000,
-      paid: false,
-      paymentMethod: "PIX",
-      vendor: "Meta Ads",
-      notes: "Pendente",
-    },
-  ];
-}
-
-function loadExpenses(): Expense[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return seedData();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return seedData();
-    return parsed;
-  } catch {
-    return seedData();
-  }
-}
-
-function saveExpenses(expenses: Expense[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
 }
 
 function sum(expenses: Expense[]) {
@@ -197,14 +161,12 @@ function avgCents(values: number[]) {
 }
 
 function monthsBack(ym: string, count: number) {
-  // ym: YYYY-MM
   const [yStr, mStr] = ym.split("-");
   let y = Number(yStr);
   let m = Number(mStr);
   const out: string[] = [];
   for (let i = 0; i < count; i++) {
-    const mm = String(m).padStart(2, "0");
-    out.push(`${y}-${mm}`);
+    out.push(`${y}-${String(m).padStart(2, "0")}`);
     m -= 1;
     if (m === 0) {
       m = 12;
@@ -233,9 +195,7 @@ export default function DashboardLovable() {
   const [q, setQ] = useState<string>("");
   const [category, setCategory] = useState<Category | "all">("all");
   const [paid, setPaid] = useState<"all" | "paid" | "pending">("all");
-  const [method, setMethod] = useState<Expense["paymentMethod"] | "all">(
-    "all"
-  );
+  const [method, setMethod] = useState<PaymentMethod | "all">("all");
 
   // modal
   const [open, setOpen] = useState(false);
@@ -245,30 +205,41 @@ export default function DashboardLovable() {
     category: "Sistemas" as Category,
     amount: "",
     paid: true,
-    paymentMethod: "PIX" as Expense["paymentMethod"],
+    paymentMethod: "PIX" as PaymentMethod,
     vendor: "",
     notes: "",
     recurring: false,
   });
 
+  // 1) Carregar do banco
+  async function refresh() {
+    const { data, error } = await supabase
+      .from("expenses")
+      .select(
+        "id,created_at,date,description,category,payment_method,amount,paid,recurring,vendor,notes"
+      )
+      .order("date", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao carregar expenses:", error);
+      return;
+    }
+
+    const rows = (data ?? []) as DbExpenseRow[];
+    setExpenses(rows.map(dbToUi));
+  }
+
   useEffect(() => {
-    const loaded = loadExpenses();
-    setExpenses(loaded);
+    refresh();
   }, []);
 
-  useEffect(() => {
-    if (!expenses.length) return;
-    saveExpenses(expenses);
-  }, [expenses]);
-
+  // ====== Cálculos / filtros ======
   const months = useMemo(() => {
-    // lista de meses presentes + últimos 12
     const fromData = Array.from(new Set(expenses.map((e) => ymFromDate(e.date))))
       .sort()
       .reverse();
     const base = monthsBack(nowYM(), 12);
-    const merged = Array.from(new Set([...fromData, ...base])).sort().reverse();
-    return merged;
+    return Array.from(new Set([...fromData, ...base])).sort().reverse();
   }, [expenses]);
 
   const monthExpenses = useMemo(() => {
@@ -322,27 +293,50 @@ export default function DashboardLovable() {
     }));
   }, [expenses, month]);
 
-  function addExpense() {
-    const amount = Number(String(form.amount).replace(/\./g, "").replace(",", "."));
-    if (!form.date || !form.description.trim() || !Number.isFinite(amount) || amount <= 0) {
-      return;
-    }
-    const next: Expense = {
-      id: uid(),
+  // ====== Ações (CRUD) ======
+ async function addExpense() {
+  console.log("SUPABASE URL:", import.meta.env.VITE_SUPABASE_URL);
+
+  const amount = Number(
+    String(form.amount).replace(/\./g, "").replace(",", ".")
+  );
+  ...
+}
+
+    const uiNew: Omit<Expense, "id" | "created_at"> = {
       date: form.date,
       description: form.description.trim(),
       category: form.category,
       amountCents: Math.round(amount * 100),
       paid: form.paid,
       paymentMethod: form.paymentMethod,
-      vendor: form.vendor.trim() || undefined,
-      notes: form.notes.trim() || undefined,
+      vendor: form.vendor || undefined,
+      notes: form.notes || undefined,
       recurring: form.recurring,
     };
-    setExpenses((prev) => [next, ...prev]);
-    // se lançar em mês diferente, já navega pro mês do lançamento
-    setMonth(ymFromDate(next.date));
+
+    const payload = uiToDbInsert(uiNew);
+
+    // pega o registro criado (id, created_at etc.)
+    const { data, error } = await supabase
+      .from("expenses")
+      .insert(payload)
+      .select(
+        "id,created_at,date,description,category,payment_method,amount,paid,recurring,vendor,notes"
+      )
+      .single();
+
+    if (error) {
+      console.error("Erro ao inserir expense:", error);
+      return;
+    }
+
+    const saved = dbToUi(data as DbExpenseRow);
+
+    setExpenses((prev) => [saved, ...prev]);
+    setMonth(ymFromDate(saved.date));
     setOpen(false);
+
     setForm((f) => ({
       ...f,
       description: "",
@@ -356,14 +350,34 @@ export default function DashboardLovable() {
     }));
   }
 
-  function togglePaid(id: string) {
-    setExpenses((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, paid: !e.paid } : e))
-    );
+  async function togglePaid(id: string, currentPaid: boolean) {
+    // update otimista (muda na hora)
+    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, paid: !currentPaid } : e)));
+
+    const { error } = await supabase
+      .from("expenses")
+      .update({ paid: !currentPaid })
+      .eq("id", id);
+
+    if (error) {
+      console.error("Erro ao atualizar paid:", error);
+      // rollback se der erro
+      setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, paid: currentPaid } : e)));
+    }
   }
 
-  function removeExpense(id: string) {
+  async function removeExpense(id: string) {
+    // remove otimista
+    const snapshot = expenses;
     setExpenses((prev) => prev.filter((e) => e.id !== id));
+
+    const { error } = await supabase.from("expenses").delete().eq("id", id);
+
+    if (error) {
+      console.error("Erro ao deletar:", error);
+      // rollback
+      setExpenses(snapshot);
+    }
   }
 
   return (
@@ -403,9 +417,7 @@ export default function DashboardLovable() {
               <DialogContent className="sm:max-w-[560px] rounded-2xl">
                 <DialogHeader>
                   <DialogTitle>Adicionar despesa</DialogTitle>
-                  <DialogDescription>
-                    Preencha o essencial — você pode detalhar depois.
-                  </DialogDescription>
+                  <DialogDescription>Preencha o essencial — você pode detalhar depois.</DialogDescription>
                 </DialogHeader>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -464,7 +476,7 @@ export default function DashboardLovable() {
                     <Select
                       value={form.paymentMethod}
                       onValueChange={(v) =>
-                        setForm((f) => ({ ...f, paymentMethod: v as Expense["paymentMethod"] }))
+                        setForm((f) => ({ ...f, paymentMethod: v as PaymentMethod }))
                       }
                     >
                       <SelectTrigger className="rounded-2xl">
@@ -484,7 +496,6 @@ export default function DashboardLovable() {
                     <Label>Fornecedor (opcional)</Label>
                     <Input
                       className="rounded-2xl"
-                      placeholder="Ex.: Meta / Plataforma / Consultor"
                       value={form.vendor}
                       onChange={(e) => setForm((f) => ({ ...f, vendor: e.target.value }))}
                     />
@@ -494,7 +505,6 @@ export default function DashboardLovable() {
                     <Label>Notas (opcional)</Label>
                     <Input
                       className="rounded-2xl"
-                      placeholder="Ex.: referente ao mês / observações"
                       value={form.notes}
                       onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                     />
@@ -511,9 +521,7 @@ export default function DashboardLovable() {
                   <div className="flex items-center gap-3">
                     <Checkbox
                       checked={form.recurring}
-                      onCheckedChange={(v) =>
-                        setForm((f) => ({ ...f, recurring: Boolean(v) }))
-                      }
+                      onCheckedChange={(v) => setForm((f) => ({ ...f, recurring: Boolean(v) }))}
                     />
                     <span className="text-sm">Recorrente</span>
                   </div>
@@ -591,9 +599,7 @@ export default function DashboardLovable() {
                   <Bar dataKey="value" radius={[12, 12, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-              {!byCategory.length && (
-                <div className="mt-3 text-sm text-muted-foreground">Sem dados para este mês.</div>
-              )}
+              {!byCategory.length && <div className="mt-3 text-sm text-muted-foreground">Sem dados para este mês.</div>}
             </CardContent>
           </Card>
 
@@ -621,9 +627,7 @@ export default function DashboardLovable() {
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <CardTitle className="text-base">Lançamentos do mês</CardTitle>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {filtered.length} item(ns) após filtros
-                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{filtered.length} item(ns) após filtros</div>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -697,10 +701,7 @@ export default function DashboardLovable() {
                   {filtered.map((e, idx) => (
                     <tr
                       key={e.id}
-                      className={
-                        "border-t " +
-                        (idx % 2 === 0 ? "bg-background" : "bg-muted/10")
-                      }
+                      className={"border-t " + (idx % 2 === 0 ? "bg-background" : "bg-muted/10")}
                     >
                       <td className="px-4 py-3 whitespace-nowrap">{e.date}</td>
                       <td className="px-4 py-3">
@@ -712,7 +713,9 @@ export default function DashboardLovable() {
                         )}
                         {e.recurring && (
                           <div className="mt-2">
-                            <Badge variant="secondary" className="rounded-xl">Recorrente</Badge>
+                            <Badge variant="secondary" className="rounded-xl">
+                              Recorrente
+                            </Badge>
                           </div>
                         )}
                       </td>
@@ -720,7 +723,7 @@ export default function DashboardLovable() {
                       <td className="px-4 py-3 whitespace-nowrap">{e.paymentMethod}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <button
-                          onClick={() => togglePaid(e.id)}
+                          onClick={() => togglePaid(e.id, e.paid)}
                           className="inline-flex items-center gap-2"
                           title="Clique para alternar"
                         >
@@ -775,15 +778,13 @@ export default function DashboardLovable() {
               <div className="text-xs text-muted-foreground">
                 Dica: clique no status (Pago/Pendente) para alternar rapidamente.
               </div>
-              <div className="text-sm font-semibold">
-                Total (após filtros): {formatBRL(sum(filtered))}
-              </div>
+              <div className="text-sm font-semibold">Total (após filtros): {formatBRL(sum(filtered))}</div>
             </div>
           </CardContent>
         </Card>
 
         <div className="mt-6 text-xs text-muted-foreground">
-          Persistência local (localStorage). Para multiusuário + relatórios avançados: integrar com banco (Supabase/Postgres) e autenticação.
+          Persistência em nuvem (Supabase/Postgres). Isso deixa tudo sincronizado entre PCs.
         </div>
       </div>
     </div>

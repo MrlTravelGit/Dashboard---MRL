@@ -29,6 +29,7 @@
     "@radix-ui/react-use-callback-ref": "^1.1.1",
     "@radix-ui/react-use-controllable-state": "^1.2.2",
     "@radix-ui/react-use-layout-effect": "^1.1.1",
+    "@supabase/supabase-js": "^2.88.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.561.0",
