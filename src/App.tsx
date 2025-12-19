@@ -17,10 +17,13 @@ export default function App() {
       setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event: AuthChangeEvent, newSession: Session | null) => {
-        setSession(newSession);
-      }
+   const { data: listener } = supabase.auth.onAuthStateChange(
+    (event: AuthChangeEvent, newSession: Session | null) => {
+      console.log("AUTH EVENT:", event);
+      console.log("APP onAuthStateChange session:", newSession);
+
+      setSession(newSession);
+    }
     );
 
     return () => {
