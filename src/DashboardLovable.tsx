@@ -414,9 +414,17 @@ export default function DashboardLovable() {
               </Select>
             </div>
 
-            <Button variant="outline" className="rounded-2xl" onClick={() => supabase.auth.signOut()}>
-              Sair
-            </Button>
+          <Button
+  variant="outline"
+  className="rounded-2xl"
+  onClick={async () => {
+    await supabase.auth.signOut();
+    window.location.href = "/";
+  }}
+>
+  Sair
+</Button>
+
 
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function Auth() {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -30,6 +32,9 @@ export default function Auth() {
 
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      
+      navigate("/dashboard");
+
     } catch (err: any) {
       alert(err?.message ?? "Erro ao autenticar");
       console.error("AUTH ERROR:", err);
